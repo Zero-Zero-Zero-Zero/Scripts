@@ -1,0 +1,143 @@
+# Fonction pour écrire un titre de section dans le fichier
+function Write-SectionTitle {
+    param (
+        [string]$Title
+    )
+    "`n=== $Title ==="
+}
+
+# Fonction pour récupérer l'adresse IP publique
+function Get-PublicIP {
+    try {
+        $publicIP = Invoke-RestMethod -Uri "https://api.ipify.org?format=json" | Select-Object -ExpandProperty ip
+        return $publicIP
+    } catch {
+        return "Impossible de récupérer l'adresse IP publique."
+    }
+}
+
+# Fonction pour détecter un VPN
+function Detect-VPN {
+    # Vérifier les interfaces réseau VPN
+    $vpnInterfaces = Get-NetAdapter | Where-Object { $_.InterfaceDescription -match "VPN|Tunnel|WireGuard|OpenVPN" }
+    if ($vpnInterfaces) {
+        return "Oui (Interfaces VPN détectées : $($vpnInterfaces.InterfaceDescription -join ', '))"
+    }
+
+    # Vérifier les routes VPN
+    $vpnRoutes = Get-NetRoute | Where-Object { $_.NextHop -match "VPN|Tunnel" }
+    if ($vpnRoutes) {
+        return "Oui (Routes VPN détectées : $($vpnRoutes.DestinationPrefix -join ', '))"
+    }
+
+    # Vérifier les processus VPN
+    $vpnProcesses = Get-Process | Where-Object { $_.ProcessName -match "OpenVPN|WireGuard|NordVPN|ExpressVPN" }
+    if ($vpnProcesses) {
+        return "Oui (Processus VPN détectés : $($vpnProcesses.ProcessName -join ', '))"
+    }
+
+    return "Non"
+}
+
+# Section 1 : Informations sur la machine
+$results = @()
+$results += Write-SectionTitle -Title "1. Informations sur la machine"
+$computerName = $env:COMPUTERNAME
+$computerModel = (Get-WmiObject -Class Win32_ComputerSystem).Model
+$results += "Nom de la machine : $computerName"
+$results += "Modèle de la machine : $computerModel"
+
+# Section 2 : Informations de base sur le réseau
+$results += Write-SectionTitle -Title "2. Informations de base sur le réseau"
+$networkInfo = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null }
+$networkInfo | ForEach-Object {
+    $results += "Carte réseau : $($_.InterfaceAlias)"
+    $results += "  Adresse IP : $($_.IPv4Address.IPAddress)"
+    $results += "  Passerelle par défaut : $($_.IPv4DefaultGateway.NextHop)"
+    $results += "  Serveur DNS : $($_.DNSServer.ServerAddresses -join ', ')"
+    $results += "  Adresse MAC : $((Get-NetAdapter -InterfaceIndex $_.InterfaceIndex).MacAddress)"
+}
+
+# Section 3 : Connexions réseau actives (simplifiées)
+$results += Write-SectionTitle -Title "3. Connexions réseau actives (simplifiées)"
+$activeConnections = Get-NetTCPConnection -State Established
+if ($activeConnections) {
+    $results += ($activeConnections | Format-Table -Property LocalAddress, LocalPort, RemoteAddress, RemotePort, State | Out-String)
+} else {
+    $results += "Aucune connexion importante trouvée."
+}
+
+# Section 4 : Performances réseau
+$results += Write-SectionTitle -Title "4. Performances réseau"
+$pingResult = Test-NetConnection -ComputerName "8.8.8.8"
+$results += "Latence vers 8.8.8.8 : $($pingResult.PingReplyDetails.RoundtripTime) ms"
+
+# Section 5 : Détection de VPN
+$results += Write-SectionTitle -Title "5. Détection de VPN"
+$publicIP = Get-PublicIP
+$results += "Adresse IP publique : $publicIP"
+$results += "VPN détecté : $(Detect-VPN)"
+
+# Section 6 : Informations sur les réseaux Wi-Fi (simplifiées)
+$results += Write-SectionTitle -Title "6. Informations sur les réseaux Wi-Fi (simplifiées)"
+$wifiNetworks = netsh wlan show networks mode=bssid
+$wifiSSIDs = $wifiNetworks | Select-String "SSID" | ForEach-Object { $_.Line }
+if ($wifiSSIDs) {
+    $results += "Réseaux Wi-Fi disponibles :"
+    $results += $wifiSSIDs -join "`n"
+} else {
+    $results += "Aucun réseau Wi-Fi détecté."
+}
+
+# Section 7 : Informations sur les partages réseau (simplifiées)
+$results += Write-SectionTitle -Title "7. Informations sur les partages réseau (simplifiées)"
+$networkShares = Get-SmbShare | Where-Object { $_.Description -notmatch "Partage par défaut" }
+if ($networkShares) {
+    $results += "Partages réseau activés :"
+    $results += ($networkShares | Format-Table -Property Name, Path, Description | Out-String)
+} else {
+    $results += "Aucun partage réseau activé."
+}
+
+# Section 8 : Informations sur les services réseau
+$results += Write-SectionTitle -Title "8. Informations sur les services réseau"
+$networkServices = Get-Service | Where-Object { $_.Name -in @("Dhcp", "Dnscache", "WlanSvc") }
+$results += ($networkServices | Format-Table -Property Name, Status | Out-String)
+
+# Section 9 : Informations sur les événements réseau
+$results += Write-SectionTitle -Title "9. Informations sur les événements réseau"
+$networkEvents = Get-WinEvent -LogName "System" -MaxEvents 10 | Where-Object { $_.ProviderName -match "Network" }
+if ($networkEvents) {
+    $results += ($networkEvents | Format-Table -Property TimeCreated, ProviderName, Message | Out-String)
+} else {
+    $results += "Aucun événement réseau trouvé."
+}
+
+# Section 10 : Informations sur les configurations réseau avancées
+$results += Write-SectionTitle -Title "10. Informations sur les configurations réseau avancées"
+$ipConfigAll = Get-NetIPConfiguration -Detailed
+$results += ($ipConfigAll | Format-Table -Property InterfaceAlias, IPv4Address, IPv6Address, Dhcp | Out-String)
+
+# Section 11 : Informations sur les périphériques réseau
+$results += Write-SectionTitle -Title "11. Informations sur les périphériques réseau"
+$networkAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+$results += ($networkAdapters | Format-Table -Property Name, InterfaceDescription, MacAddress | Out-String)
+
+# Section 12 : Informations sur les performances système
+$results += Write-SectionTitle -Title "12. Informations sur les performances système"
+$cpuUsage = (Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+$memoryInfo = Get-WmiObject Win32_OperatingSystem
+$totalMemory = [math]::Round($memoryInfo.TotalVisibleMemorySize / 1MB, 2)
+$freeMemory = [math]::Round($memoryInfo.FreePhysicalMemory / 1MB, 2)
+$usedMemory = $totalMemory - $freeMemory
+$memoryUsage = ($usedMemory / $totalMemory) * 100
+$results += "Utilisation du processeur : $([math]::Round($cpuUsage, 2)) %"
+$results += "Utilisation de la mémoire : $([math]::Round($memoryUsage, 2)) %"
+$results += "Mémoire totale : $totalMemory GB"
+$results += "Mémoire utilisée : $usedMemory GB"
+$results += "Mémoire libre : $freeMemory GB"
+
+# Section 13 : Export des résultats
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$outputPath = Join-Path -Path $desktopPath -ChildPath "DiagnosticReseau.txt"
+$results | Out-File -FilePath $outputPath -Encoding UTF8
