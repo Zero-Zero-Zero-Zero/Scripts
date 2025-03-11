@@ -1,0 +1,131 @@
+import os
+import re
+import json
+import logging
+import threading
+import time
+from scapy.all import sniff, IP, TCP, ICMP
+from sklearn.ensemble import IsolationForest
+import numpy as np
+from ipaddress import ip_network, ip_address
+
+# Fichiers de configuration et de logs
+CONFIG_FILE = "config.json"
+LOG_FILE = "ids.log"
+
+# Charger la configuration depuis le fichier JSON
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        raise FileNotFoundError(f"Le fichier de configuration {CONFIG_FILE} est introuvable.")
+    
+    with open(CONFIG_FILE, "r") as f:
+        config = json.load(f)
+    
+    return config
+
+# Configurer le système de logs
+def setup_logging():
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    logging.info("Démarrage du système de détection d'intrusions.")
+
+# Détection de scans de ports (SYN packets)
+def detect_port_scan(packet, trusted_networks):
+    if packet.haslayer(TCP) and packet[TCP].flags == "S":  # SYN packet
+        src_ip = packet[IP].src
+        dst_port = packet[TCP].dport
+
+        # Vérifier si l'IP source est dans un réseau de confiance
+        is_trusted = any(ip_address(src_ip) in ip_network(network) for network in trusted_networks)
+        
+        if not is_trusted:
+            logging.warning(f"Scan de port détecté ! IP source : {src_ip}, Port : {dst_port}")
+            print(f"[IDS] Scan de port détecté ! IP source : {src_ip}, Port : {dst_port}")
+
+# Détection de Ping Flood (ICMP)
+def detect_ping_flood(packet, icmp_threshold, icmp_counter):
+    if packet.haslayer(ICMP):
+        src_ip = packet[IP].src
+        icmp_counter[src_ip] = icmp_counter.get(src_ip, 0) + 1
+
+        if icmp_counter[src_ip] > icmp_threshold:
+            logging.warning(f"Ping Flood détecté ! IP source : {src_ip}, Paquets ICMP : {icmp_counter[src_ip]}")
+            print(f"[ICMP Detection] Ping Flood détecté ! IP source : {src_ip}, Paquets ICMP : {icmp_counter[src_ip]}")
+
+# Détection de requêtes HTTP répétées
+def detect_http_flood(packet, http_threshold, http_counter):
+    if packet.haslayer(TCP) and packet.haslayer(Raw):
+        raw_data = packet[Raw].load.decode('utf-8', errors='ignore')
+        if "GET" in raw_data or "POST" in raw_data:
+            src_ip = packet[IP].src
+            http_counter[src_ip] = http_counter.get(src_ip, 0) + 1
+
+            if http_counter[src_ip] > http_threshold:
+                logging.warning(f"Requêtes HTTP répétées détectées ! IP source : {src_ip}, Requêtes : {http_counter[src_ip]}")
+                print(f"[HTTP Detection] Requêtes HTTP répétées détectées ! IP source : {src_ip}, Requêtes : {http_counter[src_ip]}")
+
+# Détection d'attaques DDoS (nombre de paquets élevé)
+def detect_ddos(packets, threshold=100):
+    if len(packets) > threshold:
+        logging.warning(f"Attaque DDoS potentielle détectée ! Nombre de paquets : {len(packets)}")
+        print(f"[DDoS Detection] Attaque DDoS potentielle détectée ! Nombre de paquets : {len(packets)}")
+
+# Détection d'anomalies avec Isolation Forest
+def detect_anomalies(data, threshold=0.1):
+    model = IsolationForest(contamination=threshold)
+    model.fit(data)
+
+    predictions = model.predict(data)
+    for i, pred in enumerate(predictions):
+        if pred == -1:
+            logging.warning(f"Anomalie détectée : {data[i]}")
+            print(f"[Anomaly Detection] Anomalie détectée : {data[i]}")
+
+# Filtrage géographique des IP suspectes
+def filter_by_region(ip, blocked_regions):
+    if any(ip.startswith(region) for region in blocked_regions):
+        logging.warning(f"Trafic bloqué depuis une région suspecte : {ip}")
+        print(f"[Geo Filter] Trafic bloqué depuis une région suspecte : {ip}")
+
+# Point d'entrée du programme
+def main():
+    # Charger la configuration
+    config = load_config()
+    trusted_networks = config.get("trusted_networks", [])
+    blocked_regions = config.get("blocked_regions", [])
+    icmp_threshold = config.get("icmp_threshold", 100)
+    http_threshold = config.get("http_threshold", 50)
+
+    # Configurer le logging
+    setup_logging()
+
+    # Démarrer la surveillance réseau dans un thread séparé
+    icmp_counter = {}
+    http_counter = {}
+    def packet_callback(packet):
+        detect_port_scan(packet, trusted_networks)
+        detect_ping_flood(packet, icmp_threshold, icmp_counter)
+        detect_http_flood(packet, http_threshold, http_counter)
+        filter_by_region(packet[IP].src, blocked_regions)
+
+    network_monitoring_thread = threading.Thread(target=sniff, kwargs={"prn": packet_callback, "filter": "tcp or icmp", "store": False})
+    network_monitoring_thread.daemon = True
+    network_monitoring_thread.start()
+
+    # Simuler des logs et des données réseau
+    print("[Main] Simulation de logs et de données réseau...")
+    simulate_logs_and_traffic()
+
+    # Garder le programme en vie pour la surveillance réseau
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[Main] Arrêt du programme.")
+        logging.info("Arrêt du système de détection d'intrusions.")
+
+if __name__ == "__main__":
+    main()
