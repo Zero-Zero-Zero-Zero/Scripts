@@ -194,3 +194,7 @@ if ($activeConnections) {
 $desktopPath = [Environment]::GetFolderPath("Desktop")
 $outputPath = Join-Path -Path $desktopPath -ChildPath "DiagnosticReseau.txt"
 $results | Out-File -FilePath $outputPath -Encoding UTF8
+
+#script créer par moi même en l'honneur de la mémoire de mon ancien camarade Simon, puisse tu reposer en paix.
+#script open source et libre de droit, tant que vous ne vous apropriez pas sa création.
+#pour tout contact, envoyer un mail a antranig.koulandjian@gmail.com
