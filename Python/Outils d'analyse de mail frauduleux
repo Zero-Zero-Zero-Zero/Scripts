@@ -1,0 +1,268 @@
+import re
+import tldextract
+import requests
+from tkinter import Tk, Label, Button, Text, Entry, END, messagebox, ttk, Scrollbar
+from spellchecker import SpellChecker
+from urllib.parse import quote
+import unicodedata
+
+# Configuration des API
+API_KEYS = {
+    "phish_tank": None,
+    "ip_quality": "", #put api here 
+    "google_safe": "" #same
+}
+
+# Paramètres d'analyse linguistique
+ORTHOGRAPHIC_THRESHOLDS = [
+    (0, 1, "🟢 Excellent"),     # 0% d'erreurs
+    (1, 2, "🟡 Léger risque"), # 1-2%
+    (2, 5, "🟠 Risque modéré"),# 2-5%
+    (5, 10, "🔴 Danger"),      # 5-10%
+    (10, 100, "💀 Très dangereux") # >10%
+]
+
+phishing_domains = {"evil.com", "phishingsite.net"}
+
+# Dictionnaire personnalisé pour les faux positifs
+CUSTOM_DICTIONARY = {
+    'fr': ['activité', 'compte', 'détecté', 'suspecte', 'mettre', 'cliquer', 'vos', 'données', 'urgence']
+}
+
+def load_trusted_domains():
+    try:
+        with open("trusted_domains.txt", "r", encoding="utf-8") as file:
+            return set(line.strip() for line in file if line.strip())
+    except FileNotFoundError:
+        return set()
+
+trusted_domains = load_trusted_domains()
+
+typosquatting_symbols = {
+    '0': 'o', '1': 'l', '3': 'e', '4': 'a', 
+    '5': 's', '6': 'b', '7': 't', '9': 'g', 'I': 'i'
+}
+
+def calculate_danger_level(error_percent):
+    for min_, max_, label in ORTHOGRAPHIC_THRESHOLDS:
+        if min_ <= error_percent < max_:
+            return (min(max((error_percent - min_) / (max_ - min_) * 5, 1), 5), label)
+    return (5, "💀 Très dangereux")
+
+def check_phishing_domain(url):
+    results = []
+    success = False
+    
+    # Vérification PhishTank
+    try:
+        headers = {
+            "User-Agent": "phishtank/python-app",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        response = requests.post(
+            "http://checkurl.phishtank.com/checkurl/",
+            data={"url": quote(url, safe=''), "format": "json"},
+            headers=headers,
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            results.append("⚠️ PhishTank: Lien suspect détecté" if data.get('results', {}).get('valid', False) 
+                          else "✅ PhishTank: Lien sûr")
+            success = True
+        else:
+            results.append(f"❌ PhishTank: Erreur {response.status_code}")
+    except Exception:
+        results.append("❌ PhishTank: Service indisponible")
+
+    # Vérification IPQualityScore
+    try:
+        response = requests.get(
+            f"https://www.ipqualityscore.com/api/json/url/{API_KEYS['ip_quality']}/{quote(url, safe='')}",
+            timeout=10
+        )
+        data = response.json()
+        results.append("⚠️ IPQualityScore: Suspect" if data.get("unsafe", False) or data.get("risk_score", 0) > 85 
+                      else "✅ IPQualityScore: Sûr")
+        success = True
+    except Exception:
+        results.append("❌ IPQualityScore: Échec")
+
+    # Vérification Google Safe Browsing
+    try:
+        payload = {
+            "client": {"clientId": "phishing-detector", "clientVersion": "1.0"},
+            "threatInfo": {
+                "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
+                "platformTypes": ["ANY_PLATFORM"],
+                "threatEntryTypes": ["URL"],
+                "threatEntries": [{"url": url}]
+            }
+        }
+        response = requests.post(
+            f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={API_KEYS['google_safe']}",
+            json=payload,
+            timeout=10
+        )
+        results.append("⚠️ Google: Dangereux" if response.json().get("matches") 
+                      else "🔵 Google: Non répertorié")
+        success = True
+    except Exception:
+        results.append("❌ Google: Service indisponible")
+
+    return "\n".join([("🔍 Analyse réussie" if success else "❌ Échec analyse")] + results)
+
+def extract_links(text):
+    return re.findall(r'https?://[^\s]+', text)
+
+def normalize_text(text):
+    return unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode()
+
+def detect_spelling_errors(text):
+    spell_fr = SpellChecker(language='fr')
+    spell_en = SpellChecker(language='en')
+    
+    # Ajout du dictionnaire personnalisé
+    spell_fr.word_frequency.load_words(CUSTOM_DICTIONARY['fr'])
+    
+    # Nettoyage avancé du texte
+    clean_text = re.sub(r'https?://\S+', '', text)  # Suppression URLs
+    words = re.findall(r'\b[\wÀ-ÿ-]+\b', clean_text, re.IGNORECASE)
+    
+    total_words = 0
+    errors = []
+    
+    for word in words:
+        # Ignorer les mots courts et les nombres
+        if len(word) < 3 or word.isdigit():
+            continue
+        
+        # Normalisation des caractères spéciaux
+        base_word = normalize_text(word).lower()
+        
+        # Vérification multilingue
+        is_correct = (not spell_fr.unknown([word])) or (not spell_en.unknown([base_word]))
+        
+        if not is_correct:
+            errors.append(word)
+        
+        total_words += 1
+    
+    return errors, total_words
+
+def analyze_email(email_text, sender):
+    results = ["=== Résultats de l'analyse ==="]
+    
+    # Analyse expéditeur
+    domain = sender.split('@')[-1]
+    suspicious_symbols = [c for c in domain if c in typosquatting_symbols]
+    results.append(f"⚠️ Expéditeur suspect (symboles: {', '.join(suspicious_symbols)}) : {sender}" if suspicious_symbols 
+                  else f"✅ Expéditeur sûr : {sender}")
+    
+    # Analyse liens
+    links = extract_links(email_text)
+    if links:
+        results.append("\n🔗 Liens détectés :")
+        for link in links:
+            results.append(f"\n=== Analyse {link} ===")
+            results.append(check_phishing_domain(link))
+    else:
+        results.append("\n🔗 Aucun lien détecté")
+    
+    # Analyse linguistique avancée
+    clean_text = re.sub(r'https?://\S+', '', email_text)
+    spelling_errors, total_words = detect_spelling_errors(clean_text)
+    
+    if total_words > 0:
+        error_percent = (len(spelling_errors) / total_words * 100) if total_words > 0 else 0
+        danger_level, label = calculate_danger_level(error_percent)
+        
+        results.append(f"\n📊 Analyse linguistique :")
+        results.append(f"• Mots analysés : {total_words}")
+        results.append(f"• Taux d'erreur : {error_percent:.1f}%")
+        results.append(f"• Niveau de risque : {label} ({danger_level:.1f}/5)")
+        if spelling_errors:
+            unique_errors = list(set(spelling_errors))[:5]
+            results.append(f"• Exemples d'erreurs : {', '.join(unique_errors)}")
+    
+    return "\n".join(results)
+
+# Interface Tkinter améliorée
+def launch_analysis():
+    email_text = text_mail.get("1.0", END).strip()
+    sender = entry_sender.get().strip()
+    
+    if not email_text or not sender:
+        messagebox.showwarning("Erreur", "Veuillez remplir tous les champs.")
+        return
+    
+    text_results.config(state='normal')
+    text_results.delete("1.0", END)
+    text_results.insert("1.0", analyze_email(email_text, sender))
+    text_results.config(state='disabled')
+
+# Création de la fenêtre principale
+root = Tk()
+root.title("PhishDetector Pro")
+root.state('zoomed')
+root.configure(bg="#f0f0f0")
+
+# Configuration du layout principal
+root.grid_columnconfigure(0, weight=1)
+root.grid_columnconfigure(1, weight=3)
+root.grid_columnconfigure(2, weight=1)
+root.grid_rowconfigure(0, weight=1)
+
+# Cadre gauche (saisie)
+left_frame = ttk.Frame(root, padding=10)
+left_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+left_frame.grid_propagate(False)
+
+Label(left_frame, text="Contenu de l'e-mail :", font=("Arial", 12, "bold")).pack()
+text_mail = Text(left_frame, wrap='word', height=15)
+text_mail.pack(fill='both', expand=True)
+
+Label(left_frame, text="Expéditeur :", font=("Arial", 12, "bold")).pack()
+entry_sender = Entry(left_frame)
+entry_sender.pack(fill='x', pady=5)
+
+Button(left_frame, text="Analyser", command=launch_analysis).pack(pady=10)
+
+# Cadre central (résultats)
+center_frame = ttk.Frame(root, padding=10)
+center_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+scrollbar = Scrollbar(center_frame)
+scrollbar.pack(side='right', fill='y')
+
+text_results = Text(center_frame, wrap='word', yscrollcommand=scrollbar.set)
+text_results.pack(fill='both', expand=True)
+scrollbar.config(command=text_results.yview)
+
+Label(center_frame, text="Résultats", font=("Arial", 12, "bold")).pack()
+
+# Cadre droit (tutoriel)
+right_frame = ttk.Frame(root, padding=10)
+right_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+right_frame.grid_propagate(False)
+
+tutorial_text = """
+=== Guide Rapide ===
+1. Collez le texte de l'e-mail
+2. Entrez l'expéditeur
+3. Cliquez sur Analyser
+
+=== Conseils ===
+- Vérifiez les liens inconnus
+- Méfiez-vous des urgences non justifiées
+- Signalez les e-mails suspects"""
+
+Label(right_frame, text="Mode d'emploi", font=("Arial", 12, "bold")).pack()
+Label(right_frame, text=tutorial_text, justify="left", wraplength=250).pack(fill='both')
+
+# Taille minimale des cadres
+left_frame.config(width=400)
+right_frame.config(width=300)
+
+# Lancement de l'application
+root.mainloop()
