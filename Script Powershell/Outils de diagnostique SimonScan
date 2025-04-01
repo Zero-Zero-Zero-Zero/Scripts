@@ -1,0 +1,200 @@
+# Fonction pour écrire un titre de section dans le fichier
+function Write-SectionTitle {
+    param (
+        [string]$Title
+    )
+    "`n=== $Title ==="
+}
+
+# Fonction pour récupérer l'adresse IP publique
+function Get-PublicIP {
+    try {
+        $publicIP = Invoke-RestMethod -Uri "https://api.ipify.org?format=json" | Select-Object -ExpandProperty ip
+        return $publicIP
+    } catch {
+        return "Impossible de récupérer l'adresse IP publique."
+    }
+}
+
+# Fonction pour obtenir la localisation géographique d'une IP
+function Get-IPLocation {
+    param (
+        [string]$IP
+    )
+    try {
+        $response = Invoke-RestMethod -Uri "http://ip-api.com/json/$IP"
+        if ($response.status -eq "success") {
+            return "$($response.city), $($response.regionName), $($response.country)"
+        } else {
+            return "Localisation inconnue"
+        }
+    } catch {
+        return "Localisation inconnue"
+    }
+}
+
+# Initialisation des résultats
+$results = @()
+
+# Section 1 : Informations sur la machine
+$results += Write-SectionTitle -Title "1. Informations sur la machine"
+$computerName = $env:COMPUTERNAME
+$computerModel = (Get-WmiObject -Class Win32_ComputerSystem).Model
+$serialNumber = (Get-WmiObject -Class Win32_BIOS).SerialNumber
+$results += "Nom de la machine : $computerName"
+$results += "Modèle de la machine : $computerModel"
+$results += "Numéro de série : $serialNumber"
+
+# Section 2 : Informations de base sur le réseau
+$results += Write-SectionTitle -Title "2. Informations de base sur le réseau"
+$networkInfo = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null }
+$networkInfo | ForEach-Object {
+    $results += "Carte réseau : $($_.InterfaceAlias)"
+    $results += "  Adresse IP : $($_.IPv4Address.IPAddress)"
+    $results += "  Passerelle par défaut : $($_.IPv4DefaultGateway.NextHop)"
+    $results += "  Serveur DNS : $($_.DNSServer.ServerAddresses -join ', ')"
+    $results += "  Adresse MAC : $((Get-NetAdapter -InterfaceIndex $_.InterfaceIndex).MacAddress)"
+}
+
+# Section 3 : Informations sur les performances système
+$results += Write-SectionTitle -Title "3. Informations sur les performances système"
+$cpuUsage = (Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+$memoryInfo = Get-WmiObject Win32_OperatingSystem
+$totalMemory = [math]::Round($memoryInfo.TotalVisibleMemorySize / 1MB, 2)
+$freeMemory = [math]::Round($memoryInfo.FreePhysicalMemory / 1MB, 2)
+$usedMemory = $totalMemory - $freeMemory
+$memoryUsage = ($usedMemory / $totalMemory) * 100
+$results += "Utilisation du processeur : $([math]::Round($cpuUsage, 2)) %"
+$results += "Utilisation de la mémoire : $([math]::Round($memoryUsage, 2)) %"
+$results += "Mémoire totale : $totalMemory GB"
+$results += "Mémoire utilisée : $usedMemory GB"
+$results += "Mémoire libre : $freeMemory GB"
+
+# Section 4 : Vérification de la version de l'OS et des mises à jour
+$results += Write-SectionTitle -Title "4. Vérification de la version de l'OS et des mises à jour"
+$osInfo = Get-WmiObject -Class Win32_OperatingSystem
+$results += "Version de l'OS : $($osInfo.Caption) $($osInfo.Version)"
+$results += "Vérification des mises à jour :"
+$updateSession = New-Object -ComObject Microsoft.Update.Session
+$updateSearcher = $updateSession.CreateUpdateSearcher()
+$searchResult = $updateSearcher.Search("IsInstalled=0")
+if ($searchResult.Updates.Count -gt 0) {
+    $results += "Des mises à jour sont disponibles."
+} else {
+    $results += "Le système est à jour."
+}
+
+# Section 5 : Vérification des pilotes matériels
+$results += Write-SectionTitle -Title "5. Vérification des pilotes matériels"
+$drivers = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName -ne $null }
+$outdatedDrivers = $drivers | Where-Object { $_.DriverVersion -ne $_.DriverVersion }
+if ($outdatedDrivers) {
+    $results += "Pilotes matériels non à jour :"
+    $results += ($outdatedDrivers | Format-Table -Property DeviceName, DriverVersion, Manufacturer | Out-String)
+} else {
+    $results += "Tous les pilotes sont à jour."
+}
+
+# Section 6 : Informations sur les réseaux Wi-Fi
+$results += Write-SectionTitle -Title "6. Informations sur les réseaux Wi-Fi"
+$wifiNetworks = netsh wlan show networks mode=bssid
+$wifiSSIDs = $wifiNetworks | Select-String "SSID" | ForEach-Object { $_.Line }
+if ($wifiSSIDs) {
+    $results += "Réseaux Wi-Fi disponibles :"
+    $results += $wifiSSIDs -join "`n"
+} else {
+    $results += "Aucun réseau Wi-Fi détecté."
+}
+
+# Section 7 : Informations sur les partages réseau
+$results += Write-SectionTitle -Title "7. Informations sur les partages réseau"
+$networkShares = Get-SmbShare
+if ($networkShares) {
+    $results += "Partages réseau activés :"
+    $networkShares | ForEach-Object {
+        if ($_.Name -eq "IPC$") {
+            $results += "$($_.Name) (Partage Windows par défaut)"
+        } elseif ($_.Description -notmatch "Partage par défaut") {
+            $results += "$($_.Name) $($_.Path) $($_.Description)"
+        }
+    }
+} else {
+    $results += "Aucun partage réseau activé."
+}
+
+# Section 8 : Informations sur les configurations réseau avancées
+$results += Write-SectionTitle -Title "8. Informations sur les configurations réseau avancées"
+$ipConfigAll = Get-NetIPConfiguration -Detailed
+$results += ($ipConfigAll | Format-Table -Property InterfaceAlias, IPv4Address, IPv6Address, Dhcp | Out-String)
+
+# Section 9 : Informations sur les périphériques réseau
+$results += Write-SectionTitle -Title "9. Informations sur les périphériques réseau"
+$networkAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+$results += ($networkAdapters | Format-Table -Property Name, InterfaceDescription, MacAddress | Out-String)
+
+# Section 10 : Performances réseau
+$results += Write-SectionTitle -Title "10. Performances réseau"
+$pingResult = Test-NetConnection -ComputerName "8.8.8.8" -TraceRoute
+$results += "Latence vers 8.8.8.8 : $($pingResult.PingReplyDetails.RoundtripTime) ms"
+$results += "Chemin du ping vers 8.8.8.8 :"
+$pingResult.TraceRoute | ForEach-Object {
+    $location = Get-IPLocation -IP $_
+    $results += "  $_ ($location)"
+}
+
+# Section 11 : Analyse des erreurs système
+$results += Write-SectionTitle -Title "11. Analyse des erreurs système"
+$systemErrors = Get-WinEvent -LogName "System" -MaxEvents 10 | Where-Object { $_.Level -eq 2 }
+if ($systemErrors) {
+    $results += "Erreurs système récentes :"
+    $results += ($systemErrors | Format-Table -Property TimeCreated, ProviderName, Message | Out-String)
+} else {
+    $results += "Aucune erreur système trouvée."
+}
+
+# Section 12 : Informations sur les événements réseau
+$results += Write-SectionTitle -Title "12. Informations sur les événements réseau"
+$networkEvents = Get-WinEvent -LogName "System" -MaxEvents 10 | Where-Object { $_.ProviderName -match "Network" }
+if ($networkEvents) {
+    $results += ($networkEvents | Format-Table -Property TimeCreated, ProviderName, Message | Out-String)
+} else {
+    $results += "Aucun événement réseau trouvé."
+}
+
+# Section 13 : Analyse des logs d'application
+$results += Write-SectionTitle -Title "13. Analyse des logs d'application"
+$appLogs = Get-WinEvent -LogName "Application" -MaxEvents 10 | Where-Object { $_.Level -eq 2 }
+if ($appLogs) {
+    $results += "Erreurs d'application récentes :"
+    $results += ($appLogs | Format-Table -Property TimeCreated, ProviderName, Message | Out-String)
+} else {
+    $results += "Aucune erreur d'application trouvée."
+}
+
+# Section 14 : Analyse des logs de démarrage
+$results += Write-SectionTitle -Title "14. Analyse des logs de démarrage"
+$bootLogs = Get-WinEvent -LogName "System" -MaxEvents 10 | Where-Object { $_.ProviderName -match "Microsoft-Windows-Kernel-Boot" }
+if ($bootLogs) {
+    $results += "Logs de démarrage récents :"
+    $results += ($bootLogs | Format-Table -Property TimeCreated, ProviderName, Message | Out-String)
+} else {
+    $results += "Aucun log de démarrage trouvé."
+}
+
+# Section 15 : Connexions réseau actives
+$results += Write-SectionTitle -Title "15. Connexions réseau actives"
+$activeConnections = Get-NetTCPConnection -State Established
+if ($activeConnections) {
+    $results += ($activeConnections | Format-Table -Property LocalAddress, LocalPort, RemoteAddress, RemotePort, State | Out-String)
+} else {
+    $results += "Aucune connexion importante trouvée."
+}
+
+# Export des résultats
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$outputPath = Join-Path -Path $desktopPath -ChildPath "DiagnosticReseau.txt"
+$results | Out-File -FilePath $outputPath -Encoding UTF8
+
+#script créer par moi même en l'honneur de la mémoire de mon ancien camarade Simon, puisse tu reposer en paix.
+#script open source et libre de droit, tant que vous ne vous apropriez pas sa création.
+#pour tout contact, envoyer un mail a antranig.koulandjian@gmail.com
