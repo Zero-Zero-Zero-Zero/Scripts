@@ -1,1 +1,96 @@
 
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <random>
+#include <chrono>
+#include <string>
+#include <sstream>
+
+// Classe pour générer et injecter du code inutile dans des scripts PowerShell
+class PowerShellJunkGenerator {
+private:
+    std::mt19937 rng;  // Générateur de nombres aléatoires
+    std::vector<std::string> junkInstructions = {
+        "$null | Out-Null",
+        "$_ = $_",
+        "if ($true) { }",
+        "try { } catch { }",
+        "[void]($null -eq $null)",
+        "$ErrorActionPreference = $ErrorActionPreference",
+        "function Noop { param($x) $x }; Noop 1",
+        "$PSVersionTable.PSVersion | Out-Null"
+    };
+
+public:
+    // Initialise le générateur aléatoire avec une seed basée sur l'heure actuelle
+    PowerShellJunkGenerator() : rng(std::chrono::steady_clock::now().time_since_epoch().count()) {}
+
+    // Génère un nombre donné d'instructions PowerShell inutiles
+    std::string generateJunkCode(int numInstructions) {
+        std::string junkCode;
+        std::uniform_int_distribution<int> dist(0, junkInstructions.size() - 1);
+
+        for (int i = 0; i < numInstructions; ++i) {
+            junkCode += junkInstructions[dist(rng)] + "\n";
+        }
+
+        return junkCode;
+    }
+
+    // Injecte du code inutile dans un script PowerShell existant
+    std::string injectJunkCode(const std::string& script) {
+        std::istringstream iss(script);
+        std::string line;
+        std::string modifiedScript;
+        std::uniform_int_distribution<int> dist(1, 3);
+
+        while (std::getline(iss, line)) {
+            modifiedScript += line + "\n";
+            if (!line.empty() && line[0] != '#') {  // Ne pas injecter de code après les commentaires
+                modifiedScript += generateJunkCode(dist(rng));
+            }
+        }
+
+        return modifiedScript;
+    }
+};
+
+// Fonction principale
+int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <input_powershell_script> <output_powershell_script>" << std::endl;
+        return 1;
+    }
+
+    std::string inputFile = argv[1];  // Fichier PowerShell d'entrée
+    std::string outputFile = argv[2];  // Fichier PowerShell de sortie
+
+    // Lecture du fichier d'entrée
+    std::ifstream inFile(inputFile);
+    if (!inFile) {
+        std::cerr << "Error: Cannot open input file." << std::endl;
+        return 1;
+    }
+
+    std::string script((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    inFile.close();
+
+    // Génération et injection du code inutile
+    PowerShellJunkGenerator generator;
+    std::string modifiedScript = generator.injectJunkCode(script);
+
+    // Écriture du script modifié dans le fichier de sortie
+    std::ofstream outFile(outputFile);
+    if (!outFile) {
+        std::cerr << "Error: Cannot open output file." << std::endl;
+        return 1;
+    }
+
+    outFile << modifiedScript;
+    outFile.close();
+
+    std::cout << "Junk code injected successfully. Modified script saved to " << outputFile << std::endl;
+
+    return 0;
+}
