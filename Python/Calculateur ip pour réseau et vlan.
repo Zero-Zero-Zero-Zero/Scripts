@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidgetItem, QGroupBox, QMessageBox, QHeaderView)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
-
+#IMPORTANT, les conventions de nommage sont les suivantes pour un réseau en 192.168.1.0/24 les vlan seront sous format 192.168.10.0/ pour la vlan 2 ce sera 192.168.20.0 pour 30 192.168.1.30 etc etc 
 class IPCalculatorPro(QMainWindow):
     def __init__(self):
         super().__init__()
