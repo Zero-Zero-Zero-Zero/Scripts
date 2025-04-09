@@ -1,2 +1,2 @@
 # Scripts
-Repository de mes scrips, powershell, python c++ etc
+Repository de mes scripts, powershell, python c++.
